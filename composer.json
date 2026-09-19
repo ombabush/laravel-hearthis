@@ -1,9 +1,13 @@
 {
     "name": "ombabush/laravel-hearthis",
-    "description": "A small Laravel client for the hearthis.at public API: tracks, playlists and embeds, without a key.",
+    "description": "A Laravel client for the hearthis.at API: read a profile without a key, upload and edit tracks with one.",
     "type": "library",
     "license": "MIT",
-    "authors": [{ "name": "ombabush" }],
+    "authors": [
+        {
+            "name": "ombabush"
+        }
+    ],
     "require": {
         "php": "^8.2",
         "illuminate/support": "^11.0|^12.0",
@@ -14,17 +18,37 @@
         "pestphp/pest": "^3.0"
     },
     "autoload": {
-        "psr-4": { "Ombabush\\Hearthis\\": "src/" }
+        "psr-4": {
+            "Ombabush\\Hearthis\\": "src/"
+        }
     },
     "autoload-dev": {
-        "psr-4": { "Ombabush\\Hearthis\\Tests\\": "tests/" }
+        "psr-4": {
+            "Ombabush\\Hearthis\\Tests\\": "tests/"
+        }
     },
     "extra": {
         "laravel": {
-            "providers": ["Ombabush\\Hearthis\\HearthisServiceProvider"]
+            "providers": [
+                "Ombabush\\Hearthis\\HearthisServiceProvider"
+            ]
         }
     },
     "minimum-stability": "stable",
     "prefer-stable": true,
-    "config": { "allow-plugins": { "pestphp/pest-plugin": true } }
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "keywords": [
+        "laravel",
+        "hearthis",
+        "hearthis.at",
+        "music",
+        "dj",
+        "mixes",
+        "audio",
+        "api"
+    ]
 }
