@@ -182,16 +182,29 @@ it('sends nothing extra when it has no credentials', function () {
     Http::assertSent(fn ($r) => ! str_contains($r->url(), 'secret='));
 });
 
-it('exchanges an email and password for a key pair', function () {
-    Http::fake(['*login*' => Http::response(['key' => 'K', 'secret' => 'S', 'username' => 'OmBabush'])]);
+it('exchanges an email and password for a credential pair', function () {
+    // /login/ calls them masterkey and verify_code; everything else calls the
+    // same two values key and secret.
+    Http::fake(['*login*' => Http::response([
+        'masterkey' => 'K', 'verify_code' => 'S', 'username' => 'OmBabush',
+    ])]);
 
     $r = Hearthis::login('a@b.c', 'pw');
 
-    expect($r['key'])->toBe('K')->and($r['user']['name'])->toBe('OmBabush');
+    expect($r['key'])->toBe('K')
+        ->and($r['secret'])->toBe('S')
+        ->and($r['user']['name'])->toBe('OmBabush');
 
-    // The password goes in the body, never the URL — a query string ends up in
-    // access logs and in browser history.
-    Http::assertSent(fn ($req) => ! str_contains($req->url(), 'password'));
+    // It is a GET — hearthis's choice, not ours. Pinned here because it means
+    // the password lands in access logs, and a future "tidy-up" that switched
+    // this to POST would simply stop working.
+    Http::assertSent(fn ($req) => $req->method() === 'GET');
+});
+
+it('also accepts the key/secret spelling, in case /login/ is ever tidied up', function () {
+    Http::fake(['*login*' => Http::response(['key' => 'K', 'secret' => 'S'])]);
+
+    expect(Hearthis::login('a@b.c', 'pw')['secret'])->toBe('S');
 });
 
 it('repeats hearthis own words when a login is refused', function () {

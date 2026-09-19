@@ -33,6 +33,13 @@ class HearthisLoginCommand extends Command
         // sit in shell history and be visible in the process list.
         $password = $this->secret('password (not stored, not echoed)');
 
+        // Said out loud because it is hearthis's design and the operator cannot
+        // opt out of it: /login/ is a GET, so the password goes in the query
+        // string — into their access logs, and any proxy's in between.
+        $this->newLine();
+        $this->warn('hearthis /login/ is a GET: the password travels in the URL and will');
+        $this->warn('appear in their server logs. This is their API, not a choice here.');
+
         if (! $email || ! $password) {
             $this->error('Both an email and a password are needed.');
 

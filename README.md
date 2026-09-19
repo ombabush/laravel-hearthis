@@ -68,9 +68,19 @@ API at all: an `<iframe>` carries a track id and nothing else.
 ## Credentials — where the key and secret come from
 
 hearthis has **no OAuth, no developer portal and no "create an application"
-form**. You post your email and password to `/login/` once, it returns a `key`
-and a `secret`, and those two ride along as ordinary query parameters on any
-endpoint afterwards.
+form**. You call `/login/` once with your email and password; it returns
+`masterkey` and `verify_code`, which are the same two values every other
+endpoint calls `key` and `secret`, and those ride along as ordinary query
+parameters afterwards.
+
+Two warnings, both theirs and not this package's:
+
+- **`/login/` is a GET**, so the password travels in the query string — into
+  their access logs and any proxy's in between. Run it once, from a console.
+- **The API documentation is Premium-only.** `hearthis.at/api/` answers 401 with
+  "the hearthis.at API documentation is available to logged-in Premium accounts
+  only" for everyone else. Reading the API needs no account; reading the *docs*
+  does.
 
 ```sh
 php artisan hearthis:login          # prompts, hides the password, prints the pair

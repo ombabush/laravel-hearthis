@@ -68,12 +68,23 @@ class Hearthis
     }
 
     /**
-     * Exchange an email and password for the `key`/`secret` pair, once.
+     * Exchange an email and password for the credential pair, once.
      *
-     * Deliberately a separate, explicit call that returns the pair instead of
+     * Two things about this are hearthis's design and not ours, and both are
+     * worth knowing before you run it:
+     *
+     *  - It is a **GET**. The password therefore travels in the query string,
+     *    which is exactly where a password should never be: query strings are
+     *    written to access logs, proxy logs and browser history. There is no
+     *    POST form of this endpoint. Run it once, from a console, and treat the
+     *    password as having been seen.
+     *  - The pair comes back as `masterkey` and `verify_code`, which are the
+     *    same two values every other endpoint calls `key` and `secret`. The
+     *    names are translated here so nothing downstream has to know.
+     *
+     * Deliberately a separate, explicit call that RETURNS the pair instead of
      * storing it: a password should pass through your hands and land in your
-     * `.env`, not be held by a library. Run it from a console, put the two
-     * values in the environment, and never call this again.
+     * own `.env`, not be held by a library.
      *
      * @return array{key:string, secret:string, user:array<string,mixed>}
      */
@@ -82,24 +93,29 @@ class Hearthis
         $client = new static(null, $config);
 
         $response = Http::timeout((int) $client->option('timeout', 20))
-            ->asForm()
-            ->post(rtrim((string) $client->option('endpoint'), '/').'/login/', [
+            ->acceptJson()
+            ->get(rtrim((string) $client->option('endpoint'), '/').'/login/', [
                 'email' => $email, 'password' => $password,
             ]);
 
         $body = $response->json();
 
-        if (! is_array($body) || empty($body['key']) || empty($body['secret'])) {
+        // `masterkey`/`verify_code` is what /login/ calls them; `key`/`secret`
+        // is what everything else does. Accept either, hand back one shape.
+        $key = is_array($body) ? ($body['masterkey'] ?? $body['key'] ?? null) : null;
+        $secret = is_array($body) ? ($body['verify_code'] ?? $body['secret'] ?? null) : null;
+
+        if (! $key || ! $secret) {
             throw new HearthisException(
-                'hearthis did not return a key/secret pair: '
+                'hearthis did not return a credential pair: '
                 .(is_array($body) ? ($body['message'] ?? 'unknown response') : 'unreadable response')
             );
         }
 
         return [
-            'key' => (string) $body['key'],
-            'secret' => (string) $body['secret'],
-            'user' => Artist::fromApi($body),
+            'key' => (string) $key,
+            'secret' => (string) $secret,
+            'user' => Artist::fromApi(is_array($body) ? $body : []),
         ];
     }
 
