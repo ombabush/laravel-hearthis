@@ -25,7 +25,19 @@ return [
 
     'secret' => env('HEARTHIS_SECRET'),
 
+    /*
+     * Uploads live on a HOST OF THEIR OWN — not on api-v2, which is why
+     * POST /upload/ there merely redirects to the web form. Anything that
+     * writes a track goes here.
+     */
+    'upload_endpoint' => env('HEARTHIS_UPLOAD_ENDPOINT', 'https://xhr.hearthis.at/'),
+
     'timeout' => (int) env('HEARTHIS_TIMEOUT', 20),
+
+    /*
+     * Uploading a two-hour set is not a twenty-second request.
+     */
+    'upload_timeout' => (int) env('HEARTHIS_UPLOAD_TIMEOUT', 600),
 
     /*
      * Tracks per request. hearthis pages at 50; `max_pages` is a ceiling so a

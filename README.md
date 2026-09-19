@@ -97,8 +97,16 @@ pair — a library that keeps your password is a library you have to trust twice
 **Everything above works without any of this**; unset, the client simply sees
 what the public sees.
 
-> Uploading is not possible through the API. `POST /upload/` on api-v2 redirects
-> to the web form, and the older `/api/upload/` paths are empty redirects too.
+### Uploading
+
+Uploads are **not** on `api-v2` — `POST /upload/` there just redirects to the web
+form, which is what makes it look as though the API cannot write at all. They
+live on a host of their own, `https://xhr.hearthis.at/`, and that is configured
+separately (`HEARTHIS_UPLOAD_ENDPOINT`).
+
+Support for it is not written yet: the documentation is Premium-only, and
+guessing at a write endpoint's parameters means firing malformed requests at
+someone else's server until one sticks. When the contract is known it goes here.
 
 Plain arrays rather than objects on purpose: the caller almost always wants to
 put these in a `jsonb` column or a cache, and a DTO is one `toArray()` away from
