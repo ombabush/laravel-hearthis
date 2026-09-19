@@ -49,7 +49,12 @@ class TrackWriter
             throw new HearthisException("No such file: {$path}");
         }
 
-        $request = $this->request()->attach('file', file_get_contents($path), basename($path));
+        // A HANDLE, not the file's contents. `file_get_contents` on a two-hour
+        // set is two hundred megabytes in PHP's memory before a single byte
+        // leaves the machine — on a box with 2 GB free and a queue worker
+        // already running, that is the difference between a release and an
+        // out-of-memory. Guzzle streams a resource straight to the socket.
+        $request = $this->request()->attach('file', $this->handle($path), basename($path));
 
         if ($cover !== null) {
             if (! is_file($cover)) {
@@ -58,19 +63,29 @@ class TrackWriter
 
             // `image` beats artwork embedded in the file's ID3 tags, which is
             // extracted automatically when this is absent.
-            $request = $request->attach('image', file_get_contents($cover), basename($cover));
+            $request = $request->attach('image', $this->handle($cover), basename($cover));
         }
 
-        $response = $request->post($this->url('upload_api.php'), $this->fields($meta));
-        $body = $response->json();
+        return $this->file($request->post($this->url('upload_api.php'), $this->fields($meta))->json(), $strict);
+    }
 
-        $file = $body['files'][0] ?? null;
+    /**
+     * Unwrap an upload response.
+     *
+     * @param  mixed  $body
+     * @return array<string,mixed>
+     */
+    protected function file($body, bool $strict): array
+    {
+        $file = is_array($body) ? ($body['files'][0] ?? null) : null;
 
         if (! is_array($file)) {
             throw new HearthisException('hearthis returned no file in the upload response.');
         }
 
-        // Their errors arrive inside a 200 body, not as a status code.
+        // Their errors arrive inside a 200 body, not as a status code. That
+        // includes «Duplicate content: This file was already uploaded», which
+        // is the one a re-run of a batch will hit.
         if (! empty($file['error'])) {
             throw new HearthisException((string) $file['error']);
         }
@@ -132,7 +147,7 @@ class TrackWriter
         }
 
         $response = $this->request()
-            ->attach('image', file_get_contents($path), basename($path))
+            ->attach('image', $this->handle($path), basename($path))
             ->post($this->url('track_image_api.php'), ['track_id' => $trackId]);
 
         return $this->result($response->json());
@@ -179,6 +194,46 @@ class TrackWriter
         }
 
         return $fields;
+    }
+
+    /**
+     * Upload a file hearthis's other way: a raw binary body with an
+     * `X-Filename` header, metadata in the query string.
+     *
+     * Same result as `upload()`, one less layer of encoding — multipart adds
+     * boundaries and base64-free but still framed chunks around the audio.
+     * Useful when the file is very large or the sending side is memory-shy.
+     *
+     * @param  array<string,mixed>  $meta
+     * @return array<string,mixed>
+     */
+    public function uploadRaw(string $path, array $meta = [], bool $strict = true): array
+    {
+        if (! is_file($path)) {
+            throw new HearthisException("No such file: {$path}");
+        }
+
+        $url = $this->url('upload_api.php');
+        $query = http_build_query($this->fields($meta));
+
+        $response = $this->request()
+            ->withHeaders(['X-Filename' => basename($path)])
+            ->withBody($this->handle($path), 'application/octet-stream')
+            ->post($url.($query !== '' ? '&'.$query : ''));
+
+        return $this->file($response->json(), $strict);
+    }
+
+    /** @return resource */
+    protected function handle(string $path)
+    {
+        $handle = fopen($path, 'rb');
+
+        if ($handle === false) {
+            throw new HearthisException("Could not open: {$path}");
+        }
+
+        return $handle;
     }
 
     protected function request(): PendingRequest

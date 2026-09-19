@@ -29,6 +29,8 @@ use Illuminate\Support\Facades\Facade;
  * @method static \Illuminate\Support\Collection categories()
  * @method static \Illuminate\Support\Collection category(string $slug, int $count = 20, int $page = 1)
  * @method static \Ombabush\Hearthis\TrackWriter write()
+ * @method static \Ombabush\Hearthis\Sets sets()
+ * @method static \Ombabush\Hearthis\Groups groups()
  * @method static \Ombabush\Hearthis\Hearthis withCredentials(?string $key = null, ?string $secret = null)
  * @method static array login(string $email, string $password, array $config = [])
  * @method static int duration(iterable $tracks)

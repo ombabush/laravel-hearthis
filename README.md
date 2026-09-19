@@ -144,6 +144,29 @@ read in the server's timezone, and you do not know what that is.
 one line each, `[timestamp] Artist - Title`, split on the *first* « - » so a
 hyphen inside a name survives. Sending a tracklist replaces every chapter.
 
+## Sets and groups
+
+```php
+$h = Hearthis::for('ombabush')->withCredentials();
+
+$h->sets()->mine();
+$h->sets()->create('Best of 2026', $trackId);   // no such thing as an empty set
+$h->sets()->add($setId, $trackId);
+$h->sets()->removeTrack($setId, $trackId);
+$h->sets()->delete($setId);                     // the tracks are untouched
+
+$h->groups()->byGenre('techno');
+$h->groups()->complete($id);                    // { meta, tracks }
+$h->groups()->members($id);                     // owner first, rights 10
+$h->groups()->addTrack($id, $trackId);
+$h->groups()->setRole($id, $userId, Groups::BLOCKED);
+$h->groups()->delete($id);                      // permanent, unlike a track
+```
+
+Group roles are integers and not ordinal in the obvious way: `OWNER = 10`,
+`EDITOR = 5`, `MEMBER = 0`, **`BLOCKED = -1`**. A blocked member is a row with a
+negative right, not a missing row.
+
 ## The docs themselves
 
 `hearthis.at/api/` is the full reference, including an OpenAPI 3.0 spec at

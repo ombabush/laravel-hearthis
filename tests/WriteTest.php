@@ -127,3 +127,72 @@ it('formats and parses chapters the way their parser splits them', function () {
         ->and(Tracklist::stamp(3735))->toBe('1:02:15')
         ->and(Tracklist::seconds('1:02:15'))->toBe(3735);
 });
+
+it('streams the audio instead of reading it into memory', function () {
+    Http::fake(['*' => Http::response(['files' => [['id' => '1', 'error' => '']]])]);
+
+    // A two-hour set is ~200 MB. file_get_contents() would put all of it in
+    // PHP's memory before a byte left the machine — on a 2 GB box with a queue
+    // worker running, that is the difference between a release and an OOM.
+    $before = memory_get_usage();
+    ($this->writer)()->upload($this->audio);
+
+    expect(memory_get_usage() - $before)->toBeLessThan(1_000_000);
+});
+
+it('can send a raw binary body with X-Filename, hearthis other way', function () {
+    Http::fake(['*' => Http::response(['files' => [['id' => '9', 'error' => '']]])]);
+
+    ($this->writer)()->uploadRaw($this->audio, ['title' => 'Raw']);
+
+    Http::assertSent(function (Request $r) {
+        return $r->hasHeader('X-Filename')
+            && str_contains($r->url(), 'title=Raw')
+            && str_contains($r->url(), 'upload_api.php');
+    });
+});
+
+it('names a duplicate for what it is, since a re-run will hit it', function () {
+    Http::fake(['*' => Http::response(['files' => [
+        ['error' => 'Duplicate content: This file was already uploaded. Filename: set.mp3'],
+    ]])]);
+
+    expect(fn () => ($this->writer)()->upload($this->audio))
+        ->toThrow(HearthisException::class, 'Duplicate content');
+});
+
+it('creates a set around its first track, since there is no empty set', function () {
+    Http::fake(['*' => Http::response(['success' => true, 'id' => '9'])]);
+
+    Hearthis::for('ombabush')->withCredentials()->sets()->create('Best of 2026', 501);
+
+    Http::assertSent(function (Request $r) {
+        $b = (string) $r->body();
+
+        return str_contains($r->url(), 'set_ajax_add.php')
+            && str_contains($b, 'new_set=Best')
+            && str_contains($b, 'track_id=501');
+    });
+});
+
+it('knows blocked is a role, not an absence', function () {
+    expect(\Ombabush\Hearthis\Groups::BLOCKED)->toBe(-1)
+        ->and(\Ombabush\Hearthis\Groups::OWNER)->toBe(10)
+        ->and(\Ombabush\Hearthis\Groups::EDITOR)->toBe(5);
+
+    Http::fake(['*' => Http::response(['success' => true])]);
+
+    Hearthis::for('ombabush')->withCredentials()
+        ->groups()->setRole(42, 7, \Ombabush\Hearthis\Groups::BLOCKED);
+
+    Http::assertSent(fn (Request $r) => str_contains($r->url(), 'group/42/permissions/')
+        && str_contains((string) $r->body(), 'rights=-1'));
+});
+
+it('will not touch group or set endpoints without credentials', function () {
+    config()->set('hearthis.key', null);
+    config()->set('hearthis.secret', null);
+
+    expect(fn () => Hearthis::for('ombabush')->groups()->join(42))
+        ->toThrow(HearthisException::class, 'credentials');
+});

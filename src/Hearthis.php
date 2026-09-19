@@ -407,6 +407,75 @@ class Hearthis
         return new TrackWriter($this);
     }
 
+    /** Playlists: create, add, remove, delete. See Sets. */
+    public function sets(): Sets
+    {
+        return new Sets($this);
+    }
+
+    /** Shared shelves, with members and roles. See Groups. */
+    public function groups(): Groups
+    {
+        return new Groups($this);
+    }
+
+    /**
+     * A raw GET against the read API, for the endpoints whose shapes we do not
+     * normalise (groups, collections).
+     *
+     * @internal
+     * @return array<mixed>
+     */
+    public function raw(string $path, array $query = [], bool $auth = false): array
+    {
+        if ($auth && ! $this->hasCredentials()) {
+            throw new HearthisException('That endpoint needs credentials — call ->withCredentials() first.');
+        }
+
+        return $this->get($path, $query);
+    }
+
+    /**
+     * An authenticated POST.
+     *
+     * `$onApi` picks the host, and the two are genuinely different: groups live
+     * on api-v2 while the set endpoints are the site's own ajax scripts.
+     *
+     * @internal
+     * @param  array<string,mixed>  $body
+     * @return array<string,mixed>
+     */
+    public function postAuth(string $path, array $body = [], bool $onApi = false): array
+    {
+        if (! $this->hasCredentials()) {
+            throw new HearthisException('That endpoint needs credentials — call ->withCredentials() first.');
+        }
+
+        // Both currently resolve to api-v2: groups are documented there, and so
+        // are the set_ajax_* scripts despite looking like site endpoints. The
+        // flag stays because the documentation distinguishes them and the hosts
+        // could diverge — but it does not pretend to a difference that is not
+        // there today.
+        $url = rtrim((string) $this->option('endpoint', 'https://api-v2.hearthis.at/'), '/')
+            .'/'.ltrim($path, '/');
+        $url .= (str_contains($url, '?') ? '&' : '?').http_build_query($this->credentials());
+
+        $response = Http::timeout((int) $this->option('timeout', 20))
+            ->acceptJson()->asForm()->post($url, $body);
+
+        $json = $response->json();
+
+        if (! is_array($json)) {
+            throw new HearthisException('hearthis returned something unreadable.');
+        }
+
+        if (! empty($json['error'])) {
+            throw new HearthisException((string) $json['error']);
+        }
+
+        return $json;
+    }
+
     /** @internal for TrackWriter */
     public function config(string $key, mixed $default = null): mixed
     {
