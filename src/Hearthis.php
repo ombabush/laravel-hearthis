@@ -2,7 +2,6 @@
 
 namespace Ombabush\Hearthis;
 
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -15,19 +14,26 @@ use Ombabush\Hearthis\Exceptions\HearthisException;
  * the same public endpoint hearthis's own embeds use. That is worth stating
  * plainly, because the obvious assumption — that a music platform's API needs
  * credentials — is what stops people using it, and the alternative is what this
- * package exists to replace: pasting <iframe> tags into a page by hand.
+ * package replaces: pasting <iframe> tags into a page by hand.
  *
- * An embed carries a track id and nothing else. The API carries artwork, release
- * date, duration, genre, description and play count, and it knows about tracks
- * the page was never updated with — on the profile this was written against, the
- * page had 26 embeds and the profile had 63 sets.
+ * An embed carries a track id and nothing else. The API carries artwork,
+ * release date, duration, genre, tags, bpm, musical key, waveform and every
+ * count — and it knows about the tracks nobody remembered to add to the page.
  *
- * Returns plain arrays rather than objects on purpose: the caller almost always
- * wants to put them in a jsonb column or a cache, and a DTO is one `toArray()`
- * away from that at every call site.
+ * Credentials are optional and exist for the authenticated half: hearthis
+ * identifies a logged-in user by a `key`/`secret` pair sent as ordinary
+ * parameters, obtained once from `POST /login/`. See `login()`.
+ *
+ * Everything returns plain arrays, not objects: the caller almost always wants
+ * to put them in a jsonb column or a cache, and a DTO is one `toArray()` away
+ * from that at every call site.
  */
 class Hearthis
 {
+    protected ?string $key = null;
+
+    protected ?string $secret = null;
+
     public function __construct(
         protected ?string $user = null,
         protected array $config = [],
@@ -38,6 +44,68 @@ class Hearthis
     {
         return new static($user);
     }
+
+    /**
+     * Send a `key`/`secret` pair with every request.
+     *
+     * hearthis has no OAuth and no developer portal: you POST your email and
+     * password to `/login/` once, it hands back a key and a secret, and those
+     * two go as query parameters on any endpoint thereafter. Unset, everything
+     * here still works — it just sees what the public sees.
+     */
+    public function withCredentials(?string $key = null, ?string $secret = null): static
+    {
+        $clone = clone $this;
+        $clone->key = $key ?: $this->option('key');
+        $clone->secret = $secret ?: $this->option('secret');
+
+        return $clone;
+    }
+
+    public function hasCredentials(): bool
+    {
+        return ($this->key ?: $this->option('key')) && ($this->secret ?: $this->option('secret'));
+    }
+
+    /**
+     * Exchange an email and password for the `key`/`secret` pair, once.
+     *
+     * Deliberately a separate, explicit call that returns the pair instead of
+     * storing it: a password should pass through your hands and land in your
+     * `.env`, not be held by a library. Run it from a console, put the two
+     * values in the environment, and never call this again.
+     *
+     * @return array{key:string, secret:string, user:array<string,mixed>}
+     */
+    public static function login(string $email, string $password, array $config = []): array
+    {
+        $client = new static(null, $config);
+
+        $response = Http::timeout((int) $client->option('timeout', 20))
+            ->asForm()
+            ->post(rtrim((string) $client->option('endpoint'), '/').'/login/', [
+                'email' => $email, 'password' => $password,
+            ]);
+
+        $body = $response->json();
+
+        if (! is_array($body) || empty($body['key']) || empty($body['secret'])) {
+            throw new HearthisException(
+                'hearthis did not return a key/secret pair: '
+                .(is_array($body) ? ($body['message'] ?? 'unknown response') : 'unreadable response')
+            );
+        }
+
+        return [
+            'key' => (string) $body['key'],
+            'secret' => (string) $body['secret'],
+            'user' => Artist::fromApi($body),
+        ];
+    }
+
+    // -----------------------------------------------------------------
+    //  One profile
+    // -----------------------------------------------------------------
 
     public function user(): string
     {
@@ -53,40 +121,53 @@ class Hearthis
     }
 
     /**
+     * The artist themselves — avatar, bio, counts, links.
+     *
+     * `/<user>/` with NO `type` returns the profile; with one it returns a
+     * list. Easy to miss, and the only route to any of this.
+     *
+     * @return array<string,mixed>
+     */
+    public function artist(): array
+    {
+        return $this->remember('artist:'.$this->user(), function () {
+            $body = $this->get($this->user().'/', ['count' => 1], assoc: true);
+
+            return Artist::fromApi($body);
+        });
+    }
+
+    /**
      * Every track on the profile, newest first.
      *
      * @return Collection<int,array<string,mixed>>
      */
     public function tracks(): Collection
     {
-        return $this->remember('tracks:'.$this->user(), function () {
-            $perPage = max(1, (int) $this->option('per_page', 50));
-            $tracks = [];
+        return $this->remember('tracks:'.$this->user(), fn () => $this->walk($this->user().'/', ['type' => 'tracks']));
+    }
 
-            for ($page = 1; $page <= (int) $this->option('max_pages', 20); $page++) {
-                $batch = $this->get($this->user().'/', [
-                    'type' => 'tracks', 'page' => $page, 'count' => $perPage,
-                ]);
+    /**
+     * Tracks the profile has liked. Needs no credentials — likes are public.
+     *
+     * @return Collection<int,array<string,mixed>>
+     */
+    public function likes(): Collection
+    {
+        return $this->remember('likes:'.$this->user(), fn () => $this->walk($this->user().'/', ['type' => 'likes']));
+    }
 
-                if ($batch === []) {
-                    break;
-                }
+    /**
+     * One track, by its permalink («german-teacher-bday») or full URL.
+     *
+     * @return array<string,mixed>
+     */
+    public function track(string $permalink): array
+    {
+        $permalink = trim(str_replace('https://hearthis.at/', '', $permalink), '/');
+        $path = str_contains($permalink, '/') ? $permalink : $this->user().'/'.$permalink;
 
-                foreach ($batch as $track) {
-                    if (is_array($track) && ! empty($track['id'])) {
-                        $tracks[(string) $track['id']] = Track::fromApi($track);
-                    }
-                }
-
-                if (count($batch) < $perPage) {
-                    break;
-                }
-            }
-
-            return collect(array_values($tracks))
-                ->sortByDesc(fn (array $t) => (string) $t['released'])
-                ->values();
-        });
+        return Track::fromApi($this->get($path.'/', [], assoc: true));
     }
 
     /**
@@ -94,23 +175,16 @@ class Hearthis
      * ids of the tracks on it.
      *
      * One extra request per playlist, because the listing endpoint gives a
-     * count but not the contents. Skip it with `withTracks: false` when all you
-     * want is the shelf.
+     * count but not the contents. Pass false when all you want is the shelf.
      *
      * @return Collection<int,array<string,mixed>>
      */
     public function playlists(bool $withTracks = true): Collection
     {
         return $this->remember('playlists:'.$this->user().':'.(int) $withTracks, function () use ($withTracks) {
-            $sets = $this->get($this->user().'/', ['type' => 'playlists', 'page' => 1, 'count' => 50]);
-
-            return collect($sets)
+            return collect($this->get($this->user().'/', ['type' => 'playlists', 'page' => 1, 'count' => 50]))
                 ->filter(fn ($s) => is_array($s) && ! empty($s['permalink']))
-                ->map(function (array $set) use ($withTracks) {
-                    $ids = $withTracks ? $this->playlistTrackIds((string) $set['permalink']) : [];
-
-                    return Playlist::fromApi($set, $ids);
-                })
+                ->map(fn (array $set) => Playlist::fromApi($set, $withTracks ? $this->playlistTrackIds((string) $set['permalink']) : []))
                 ->sortByDesc('count')
                 ->values();
         });
@@ -119,26 +193,99 @@ class Hearthis
     /** @return array<int,string> */
     public function playlistTrackIds(string $permalink): array
     {
-        $tracks = $this->get('set/'.trim($permalink, '/').'/');
-
-        return collect($tracks)
+        return collect($this->get('set/'.trim($permalink, '/').'/'))
             ->filter(fn ($t) => is_array($t) && ! empty($t['id']))
             ->map(fn (array $t) => (string) $t['id'])
             ->values()->all();
     }
 
     /**
+     * A playlist's tracks in full, not just their ids.
+     *
+     * @return Collection<int,array<string,mixed>>
+     */
+    public function playlistTracks(string $permalink): Collection
+    {
+        return collect($this->get('set/'.trim($permalink, '/').'/'))
+            ->filter(fn ($t) => is_array($t) && ! empty($t['id']))
+            ->map(fn (array $t) => Track::fromApi($t))
+            ->values();
+    }
+
+    // -----------------------------------------------------------------
+    //  The rest of hearthis
+    // -----------------------------------------------------------------
+
+    /**
+     * Search all of hearthis.
+     *
+     * @return Collection<int,array<string,mixed>>
+     */
+    public function search(string $query, int $count = 20, int $page = 1): Collection
+    {
+        return collect($this->get('search', ['t' => $query, 'count' => $count, 'page' => $page]))
+            ->filter(fn ($t) => is_array($t) && ! empty($t['id']))
+            ->map(fn (array $t) => Track::fromApi($t))
+            ->values();
+    }
+
+    /**
+     * The site-wide feed. `popular` or `new`; `$minutes` filters by length,
+     * which is how you ask for sets rather than singles.
+     *
+     * @return Collection<int,array<string,mixed>>
+     */
+    public function feed(string $type = 'popular', int $count = 20, ?int $minutes = null): Collection
+    {
+        $query = ['type' => $type, 'count' => $count];
+
+        if ($minutes !== null) {
+            $query['duration'] = $minutes;
+        }
+
+        return collect($this->get('feed/', $query))
+            ->filter(fn ($t) => is_array($t) && ! empty($t['id']))
+            ->map(fn (array $t) => Track::fromApi($t))
+            ->values();
+    }
+
+    /** The 69 genres hearthis files things under. @return Collection<int,array<string,mixed>> */
+    public function categories(): Collection
+    {
+        return $this->remember('categories', fn () => collect($this->get('categories/'))
+            ->filter(fn ($c) => is_array($c) && ! empty($c['id']))
+            ->map(fn (array $c) => [
+                'id' => (string) $c['id'],
+                'name' => trim((string) ($c['name'] ?? '')),
+                'url' => (string) ($c['url'] ?? ''),
+                'colour' => (string) ($c['background_color'] ?? ''),
+            ])
+            ->values());
+    }
+
+    /** One genre's feed. @return Collection<int,array<string,mixed>> */
+    public function category(string $slug, int $count = 20, int $page = 1): Collection
+    {
+        return collect($this->get('categories/'.trim($slug, '/').'/', ['count' => $count, 'page' => $page]))
+            ->filter(fn ($t) => is_array($t) && ! empty($t['id']))
+            ->map(fn (array $t) => Track::fromApi($t))
+            ->values();
+    }
+
+    // -----------------------------------------------------------------
+    //  URLs and sums
+    // -----------------------------------------------------------------
+
+    /**
      * The embed URL for a track.
      *
-     * Kept here rather than in a view because the id is the only stable handle
-     * hearthis gives you — `stream_url` carries a short-lived token, so storing
-     * one stores something that stops working.
+     * The id is the only stable handle hearthis gives you — `stream_url`
+     * carries a short-lived token, so storing one stores something that stops
+     * working.
      */
     public function embedUrl(string|int $id, array $params = []): string
     {
-        $params = array_merge([
-            'style' => 2, 'waveform' => 1, 'cover' => 0, 'autoplay' => 0,
-        ], $params);
+        $params = array_merge(['style' => 2, 'waveform' => 1, 'cover' => 0, 'autoplay' => 0], $params);
 
         return rtrim((string) $this->option('embed', 'https://app.hearthis.at/embed/'), '/')
             .'/'.urlencode((string) $id).'/transparent_black/?'.http_build_query($params);
@@ -149,25 +296,126 @@ class Hearthis
         return 'https://hearthis.at/'.$this->user().'/';
     }
 
-    /** @return array<int,mixed> */
-    protected function get(string $path, array $query = []): array
+    /** Total running time of a track list, in seconds. */
+    public static function duration(iterable $tracks): int
     {
+        $total = 0;
+
+        foreach ($tracks as $track) {
+            $total += (int) ($track['duration'] ?? 0);
+        }
+
+        return $total;
+    }
+
+    /** «12 h 40 min», or «40 min» when it is under an hour. */
+    public static function humanDuration(int $seconds): string
+    {
+        $hours = intdiv($seconds, 3600);
+        $minutes = (int) round(($seconds % 3600) / 60);
+
+        return $hours ? "{$hours} h {$minutes} min" : "{$minutes} min";
+    }
+
+    /**
+     * Group a track list the two ways a set list is ever read.
+     *
+     * Here rather than in every caller's view because it is the same three
+     * lines everywhere, and getting «no genre» and «no date» to sort sensibly
+     * is the part people skip.
+     *
+     * NOTE the keys of byYear() arrive as INTEGERS: PHP converts a numeric
+     * string array key to an int, so '2026' becomes 2026. Harmless in a
+     * template; surprising in a comparison.
+     *
+     * @return Collection<string,Collection<int,array<string,mixed>>>
+     */
+    public static function byYear(iterable $tracks): Collection
+    {
+        return collect($tracks)
+            ->groupBy(fn (array $t) => substr((string) ($t['released'] ?? ''), 0, 4) ?: '—')
+            ->sortKeysDesc();
+    }
+
+    /** @return Collection<string,Collection<int,array<string,mixed>>> */
+    public static function byGenre(iterable $tracks): Collection
+    {
+        return collect($tracks)
+            ->groupBy(fn (array $t) => $t['genre'] ?: '—')
+            ->sortByDesc(fn (Collection $group) => $group->count());
+    }
+
+    // -----------------------------------------------------------------
+    //  Transport
+    // -----------------------------------------------------------------
+
+    /**
+     * Walk a paged listing to the end.
+     *
+     * @return Collection<int,array<string,mixed>>
+     */
+    protected function walk(string $path, array $query): Collection
+    {
+        $perPage = max(1, (int) $this->option('per_page', 50));
+        $items = [];
+
+        for ($page = 1; $page <= (int) $this->option('max_pages', 20); $page++) {
+            $batch = $this->get($path, $query + ['page' => $page, 'count' => $perPage]);
+
+            if ($batch === []) {
+                break;
+            }
+
+            foreach ($batch as $track) {
+                if (is_array($track) && ! empty($track['id'])) {
+                    $items[(string) $track['id']] = Track::fromApi($track);
+                }
+            }
+
+            if (count($batch) < $perPage) {
+                break;
+            }
+        }
+
+        return collect(array_values($items))
+            ->sortByDesc(fn (array $t) => (string) $t['released'])
+            ->values();
+    }
+
+    /** @return array<mixed> */
+    protected function get(string $path, array $query = [], bool $assoc = false): array
+    {
+        if ($this->hasCredentials()) {
+            $query += [
+                'key' => $this->key ?: $this->option('key'),
+                'secret' => $this->secret ?: $this->option('secret'),
+            ];
+        }
+
         $response = Http::timeout((int) $this->option('timeout', 20))
             ->acceptJson()
             ->get(rtrim((string) $this->option('endpoint', 'https://api-v2.hearthis.at/'), '/').'/'.$path, $query);
 
         if (! $response->successful()) {
-            throw new HearthisException(
-                "hearthis.at answered {$response->status()} for /{$path}."
-            );
+            throw new HearthisException("hearthis.at answered {$response->status()} for /{$path}.");
         }
 
         $body = $response->json();
 
-        return is_array($body) ? $body : [];
+        if (! is_array($body)) {
+            return [];
+        }
+
+        // hearthis answers 200 with a `success: false` body when a session or a
+        // resource is not there, so the status code alone is not the answer.
+        if ($assoc && isset($body['success']) && $body['success'] === false) {
+            throw new HearthisException((string) ($body['message'] ?? 'hearthis refused the request.'));
+        }
+
+        return $body;
     }
 
-    protected function remember(string $key, \Closure $fetch): Collection
+    protected function remember(string $key, \Closure $fetch): mixed
     {
         $ttl = (int) $this->option('cache_ttl', 0);
 
@@ -182,17 +430,5 @@ class Hearthis
     {
         return $this->config[$key]
             ?? (function_exists('config') ? config('hearthis.'.$key, $default) : $default);
-    }
-
-    /** Total running time of a track list, in seconds. */
-    public static function duration(iterable $tracks): int
-    {
-        $total = 0;
-
-        foreach ($tracks as $track) {
-            $total += (int) ($track['duration'] ?? 0);
-        }
-
-        return $total;
     }
 }

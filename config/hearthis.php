@@ -11,6 +11,20 @@ return [
 
     'embed' => env('HEARTHIS_EMBED', 'https://app.hearthis.at/embed/'),
 
+    /*
+     * Optional. hearthis has no OAuth and no developer portal: `POST /login/`
+     * with an email and a password returns a key/secret pair, and every other
+     * endpoint accepts the two as ordinary query parameters.
+     *
+     *   php artisan hearthis:login
+     *
+     * Everything in this package works without them — unset, it simply sees
+     * what the public sees.
+     */
+    'key' => env('HEARTHIS_KEY'),
+
+    'secret' => env('HEARTHIS_SECRET'),
+
     'timeout' => (int) env('HEARTHIS_TIMEOUT', 20),
 
     /*

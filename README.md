@@ -29,19 +29,66 @@ HEARTHIS_USER=ombabush
 ```php
 use Ombabush\Hearthis\Facades\Hearthis;
 
-$tracks    = Hearthis::for('ombabush')->tracks();     // newest first
-$playlists = Hearthis::for('ombabush')->playlists();  // with their track ids
+$hearthis = Hearthis::for('ombabush');
 
-Hearthis::embedUrl($track['id'], ['autoplay' => 1]);
-Hearthis::duration($tracks);                          // seconds
+// One profile
+$hearthis->artist();                  // avatar, bio, counts, links
+$hearthis->tracks();                  // every track, newest first
+$hearthis->likes();                   // what they have liked
+$hearthis->track('german-teacher-bday');     // one track, or a full URL
+$hearthis->playlists();               // «sets», with their track ids
+$hearthis->playlistTracks($permalink);       // a set's tracks in full
+
+// The rest of hearthis
+$hearthis->search('techno');
+$hearthis->feed('popular', 20, minutes: 60); // sets, not singles
+$hearthis->feed('new');
+$hearthis->categories();              // all 69 genres
+$hearthis->category('techno');
+
+// URLs and sums
+Hearthis::embedUrl($id, ['autoplay' => 1]);
+Hearthis::duration($tracks);          // seconds
+Hearthis::humanDuration(9000);        // «2 h 30 min»
+Hearthis::byYear($tracks);            // grouped, newest year first
+Hearthis::byGenre($tracks);           // grouped, fullest genre first
 ```
 
 Each track is a plain array:
 
 ```php
-['id', 'title', 'url', 'released', 'duration', 'genre', 'description',
- 'artwork', 'waveform', 'plays']
+['id', 'title', 'permalink', 'url', 'released', 'duration', 'genre', 'tags',
+ 'bpm', 'key', 'description', 'artwork', 'artwork_retina', 'waveform',
+ 'plays', 'likes', 'comments', 'downloadable', 'artist', 'artist_url']
 ```
+
+`bpm`, `key` (musical — «Am»), `tags` and the counts are the reason to use the
+API at all: an `<iframe>` carries a track id and nothing else.
+
+## Credentials — where the key and secret come from
+
+hearthis has **no OAuth, no developer portal and no "create an application"
+form**. You post your email and password to `/login/` once, it returns a `key`
+and a `secret`, and those two ride along as ordinary query parameters on any
+endpoint afterwards.
+
+```sh
+php artisan hearthis:login          # prompts, hides the password, prints the pair
+```
+
+Put the two values in `.env` as `HEARTHIS_KEY` and `HEARTHIS_SECRET`, then:
+
+```php
+Hearthis::for('ombabush')->withCredentials()->tracks();
+```
+
+The command does not write to your `.env` and the package does not store the
+pair — a library that keeps your password is a library you have to trust twice.
+**Everything above works without any of this**; unset, the client simply sees
+what the public sees.
+
+> Uploading is not possible through the API. `POST /upload/` on api-v2 redirects
+> to the web form, and the older `/api/upload/` paths are empty redirects too.
 
 Plain arrays rather than objects on purpose: the caller almost always wants to
 put these in a `jsonb` column or a cache, and a DTO is one `toArray()` away from

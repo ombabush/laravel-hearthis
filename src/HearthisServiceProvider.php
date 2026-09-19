@@ -4,6 +4,7 @@ namespace Ombabush\Hearthis;
 
 use Illuminate\Support\ServiceProvider;
 use Ombabush\Hearthis\Commands\HearthisFetchCommand;
+use Ombabush\Hearthis\Commands\HearthisLoginCommand;
 
 class HearthisServiceProvider extends ServiceProvider
 {
@@ -23,7 +24,7 @@ class HearthisServiceProvider extends ServiceProvider
                 __DIR__.'/../config/hearthis.php' => config_path('hearthis.php'),
             ], 'hearthis-config');
 
-            $this->commands([HearthisFetchCommand::class]);
+            $this->commands([HearthisFetchCommand::class, HearthisLoginCommand::class]);
         }
     }
 }
