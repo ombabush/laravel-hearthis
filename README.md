@@ -97,16 +97,59 @@ pair — a library that keeps your password is a library you have to trust twice
 **Everything above works without any of this**; unset, the client simply sees
 what the public sees.
 
-### Uploading
+## Writing — upload, edit, cover, delete
 
-Uploads are **not** on `api-v2` — `POST /upload/` there just redirects to the web
-form, which is what makes it look as though the API cannot write at all. They
-live on a host of their own, `https://xhr.hearthis.at/`, and that is configured
-separately (`HEARTHIS_UPLOAD_ENDPOINT`).
+Writes are **not** on `api-v2`. `POST /upload/` there just redirects to the web
+form, which is what makes it look as though the platform has no write API at
+all. It has a full one, on a host of its own: `https://xhr.hearthis.at/`.
 
-Support for it is not written yet: the documentation is Premium-only, and
-guessing at a write endpoint's parameters means firing malformed requests at
-someone else's server until one sticks. When the contract is known it goes here.
+They need a key/secret pair **and** an active Premium account — anonymous gets
+401, a free account gets 403 — and everything is scoped to the authenticated
+user: touching someone else's track is a 403.
+
+```php
+$w = Hearthis::for('ombabush')->withCredentials()->write();
+
+$track = $w->upload('/path/set.mp3', [
+    'title'        => 'Berghain Closing Set 2026',
+    'genre'        => 'techno',
+    'tags'         => ['techno', 'live', 'berlin'],
+    'description'  => "Recorded live.\nSix hours.",
+    'downloadable' => true,
+    'private'      => false,
+    'release_at'   => '2026-07-01T20:00:00+02:00',
+    'tracklist'    => [
+        ['at' => 0,    'artist' => 'Artist A', 'title' => 'Opener'],
+        ['at' => 3735, 'artist' => 'Artist C', 'title' => 'Closer'],
+    ],
+], cover: '/path/cover.jpg');
+
+$w->edit($track['id'], ['description' => 'Updated liner notes']);
+$w->setCover($track['id'], '/path/new-cover.jpg');
+$w->removeCover($track['id']);
+$w->delete($track['id']);          // soft-delete, owner only, no restore endpoint
+```
+
+**On `strict`.** An upload applies its metadata best-effort: an unknown genre or
+an unparseable date does *not* fail it, the item just carries a `meta_error`.
+Left alone that is indistinguishable from a clean upload, so `upload()` raises
+by default. Pass `strict: false` when you would rather have the file up and fix
+the metadata after. Note that `edit()` validates properly — a bad genre is a 400
+with the reason — so anything you care about is better set there.
+
+**Dates**: always send an explicit UTC offset. A bare `2026-07-01 20:00:00` is
+read in the server's timezone, and you do not know what that is.
+
+**Chapters**: `Tracklist::format()` and `::parse()` handle the wire format —
+one line each, `[timestamp] Artist - Title`, split on the *first* « - » so a
+hyphen inside a name survives. Sending a tracklist replaces every chapter.
+
+## The docs themselves
+
+`hearthis.at/api/` is the full reference, including an OpenAPI 3.0 spec at
+`hearthis.at/api/openapi.json`. Both are **Premium-only** — they answer 401 to
+everyone else — which is why no copy of either is vendored here. Reading the API
+needs no account; reading the documentation does.
 
 Plain arrays rather than objects on purpose: the caller almost always wants to
 put these in a `jsonb` column or a cache, and a DTO is one `toArray()` away from

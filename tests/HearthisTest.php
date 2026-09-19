@@ -136,15 +136,34 @@ it('reads one track by permalink, or by its full URL', function () {
     Http::assertSent(fn ($r) => str_contains($r->url(), '/ombabush/set-1/'));
 });
 
-it('searches, browses the feed and filters it by length', function () {
+it('searches the right endpoint, with a type', function () {
     Http::fake(['*' => Http::response([track(1), track(2)])]);
 
-    $client = Hearthis::for('ombabush');
+    expect(Hearthis::for('ombabush')->search('techno'))->toHaveCount(2);
 
-    expect($client->search('techno'))->toHaveCount(2)
-        ->and($client->feed('popular', 10, minutes: 60))->toHaveCount(2);
+    // `/search/` WITH the trailing slash and WITH a type. Without them it
+    // answers, but not with what you asked for.
+    Http::assertSent(fn ($r) => str_contains($r->url(), '/search/')
+        && str_contains($r->url(), 'type=tracks')
+        && str_contains($r->url(), 't=techno'));
+});
 
-    Http::assertSent(fn ($r) => str_contains($r->url(), 'duration=60'));
+it('filters the feed by length using the names hearthis actually reads', function () {
+    Http::fake(['*' => Http::response([track(1)])]);
+
+    Hearthis::for('ombabush')->longSets(60);
+
+    // `duration_min`, not `duration`. A wrong name here is ignored in silence,
+    // so the call looks fine and quietly returns three-minute singles.
+    Http::assertSent(fn ($r) => str_contains($r->url(), 'duration_min=60'));
+});
+
+it('asks the genre list the only way that returns a genre list', function () {
+    Http::fake(['*' => Http::response([['id' => 'techno', 'name' => 'Techno']])]);
+
+    Hearthis::for('ombabush')->categories();
+
+    Http::assertSent(fn ($r) => str_contains($r->url(), 'source=app'));
 });
 
 it('lists the genres and one genre s feed', function () {

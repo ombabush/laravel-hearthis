@@ -180,10 +180,7 @@ class Hearthis
      */
     public function track(string $permalink): array
     {
-        $permalink = trim(str_replace('https://hearthis.at/', '', $permalink), '/');
-        $path = str_contains($permalink, '/') ? $permalink : $this->user().'/'.$permalink;
-
-        return Track::fromApi($this->get($path.'/', [], assoc: true));
+        return Track::fromApi($this->get($this->path($permalink), [], assoc: true));
     }
 
     /**
@@ -237,12 +234,32 @@ class Hearthis
      *
      * @return Collection<int,array<string,mixed>>
      */
-    public function search(string $query, int $count = 20, int $page = 1): Collection
+    public function search(string $query, string $type = 'tracks', int $count = 20, int $page = 1): Collection
     {
-        return collect($this->get('search', ['t' => $query, 'count' => $count, 'page' => $page]))
-            ->filter(fn ($t) => is_array($t) && ! empty($t['id']))
-            ->map(fn (array $t) => Track::fromApi($t))
-            ->values();
+        // `/search/` with a TYPE — tracks, user or playlists. Without the type
+        // (and without the trailing slash) it answers, but not with what you
+        // asked for, which is the worst way for an endpoint to be wrong.
+        $items = collect($this->get('search/', [
+            'type' => $type, 't' => $query, 'count' => $count, 'page' => $page,
+        ]))->filter(fn ($i) => is_array($i) && ! empty($i['id']));
+
+        return match ($type) {
+            'user' => $items->map(fn (array $u) => Artist::fromApi($u))->values(),
+            'playlists' => $items->map(fn (array $s) => Playlist::fromApi($s))->values(),
+            default => $items->map(fn (array $t) => Track::fromApi($t))->values(),
+        };
+    }
+
+    /** @return Collection<int,array<string,mixed>> */
+    public function searchArtists(string $query, int $count = 20): Collection
+    {
+        return $this->search($query, 'user', $count);
+    }
+
+    /** @return Collection<int,array<string,mixed>> */
+    public function searchSets(string $query, int $count = 20): Collection
+    {
+        return $this->search($query, 'playlists', $count);
     }
 
     /**
@@ -251,13 +268,25 @@ class Hearthis
      *
      * @return Collection<int,array<string,mixed>>
      */
-    public function feed(string $type = 'popular', int $count = 20, ?int $minutes = null): Collection
-    {
-        $query = ['type' => $type, 'count' => $count];
-
-        if ($minutes !== null) {
-            $query['duration'] = $minutes;
-        }
+    public function feed(
+        ?string $type = null,
+        int $count = 20,
+        ?int $minMinutes = null,
+        ?int $maxMinutes = null,
+        ?string $category = null,
+        int $page = 1,
+    ): Collection {
+        // The length filter is `duration_min`/`duration_max`, NOT `duration`.
+        // A wrong name here is silently ignored, so the call looks like it
+        // worked and quietly returns three-minute singles.
+        $query = array_filter([
+            'type' => $type,
+            'category' => $category,
+            'count' => $count,
+            'page' => $page,
+            'duration_min' => $minMinutes,
+            'duration_max' => $maxMinutes,
+        ], fn ($v) => $v !== null);
 
         return collect($this->get('feed/', $query))
             ->filter(fn ($t) => is_array($t) && ! empty($t['id']))
@@ -265,10 +294,24 @@ class Hearthis
             ->values();
     }
 
+    /** This week's popular tracks, optionally within one genre. */
+    public function popular(?string $category = null, int $count = 20): Collection
+    {
+        return $this->feed('popular', $count, category: $category);
+    }
+
+    /** Sets rather than singles: anything over an hour. */
+    public function longSets(int $minMinutes = 60, int $count = 20): Collection
+    {
+        return $this->feed(count: $count, minMinutes: $minMinutes);
+    }
+
     /** The 69 genres hearthis files things under. @return Collection<int,array<string,mixed>> */
     public function categories(): Collection
     {
-        return $this->remember('categories', fn () => collect($this->get('categories/'))
+        // `?source=app` is what returns the genre LIST; without it the endpoint
+        // answers with something else entirely.
+        return $this->remember('categories', fn () => collect($this->get('categories/', ['source' => 'app']))
             ->filter(fn ($c) => is_array($c) && ! empty($c['id']))
             ->map(fn (array $c) => [
                 'id' => (string) $c['id'],
@@ -282,10 +325,109 @@ class Hearthis
     /** One genre's feed. @return Collection<int,array<string,mixed>> */
     public function category(string $slug, int $count = 20, int $page = 1): Collection
     {
-        return collect($this->get('categories/'.trim($slug, '/').'/', ['count' => $count, 'page' => $page]))
+        return collect($this->get('categories/'.trim($slug, '/').'/', [
+            'source' => 'app', 'count' => $count, 'page' => $page,
+        ]))
             ->filter(fn ($t) => is_array($t) && ! empty($t['id']))
             ->map(fn (array $t) => Track::fromApi($t))
             ->values();
+    }
+
+    // -----------------------------------------------------------------
+    //  A track's surroundings
+    // -----------------------------------------------------------------
+
+    /** Chapters. Private tracks need credentials. @return array<int,array<string,mixed>> */
+    public function chapters(string $permalink): array
+    {
+        return Tracklist::parse(implode("\n", array_map(
+            fn ($c) => is_array($c) ? trim(($c['time'] ?? '').' '.($c['title'] ?? '')) : (string) $c,
+            $this->get($this->path($permalink).'playlist/')
+        )));
+    }
+
+    /** @return Collection<int,array<string,mixed>> */
+    public function related(string $permalink, int $count = 10): Collection
+    {
+        return collect($this->get($this->path($permalink).'related/', ['count' => $count]))
+            ->filter(fn ($t) => is_array($t) && ! empty($t['id']))
+            ->map(fn (array $t) => Track::fromApi($t))
+            ->values();
+    }
+
+    /** The AI transcript, when there is one. @return array<mixed> */
+    public function transcript(string $permalink): array
+    {
+        return $this->get($this->path($permalink).'transcript/');
+    }
+
+    /** @return Collection<int,array<string,mixed>> */
+    public function comments(string $permalink): Collection
+    {
+        return collect($this->get($this->path($permalink).'comments/'))
+            ->filter(fn ($c) => is_array($c))
+            ->values();
+    }
+
+    // -----------------------------------------------------------------
+    //  People
+    // -----------------------------------------------------------------
+
+    /** @return Collection<int,array<string,mixed>> */
+    public function followers(int $count = 50, int $page = 1): Collection
+    {
+        return collect($this->get($this->user().'/follower/', ['count' => $count, 'page' => $page]))
+            ->filter(fn ($u) => is_array($u) && ! empty($u['id']))
+            ->map(fn (array $u) => Artist::fromApi($u))
+            ->values();
+    }
+
+    /** @return Collection<int,array<string,mixed>> */
+    public function following(int $count = 50, int $page = 1): Collection
+    {
+        return collect($this->get($this->user().'/following/', ['count' => $count, 'page' => $page]))
+            ->filter(fn ($u) => is_array($u) && ! empty($u['id']))
+            ->map(fn (array $u) => Artist::fromApi($u))
+            ->values();
+    }
+
+    /** Tracks this profile has reposted. @return Collection<int,array<string,mixed>> */
+    public function reposts(): Collection
+    {
+        return $this->remember('reposts:'.$this->user(), fn () => $this->walk($this->user().'/', ['type' => 'reposts']));
+    }
+
+    // -----------------------------------------------------------------
+    //  Writing — a different host, and Premium only
+    // -----------------------------------------------------------------
+
+    /** Upload, edit, delete, cover. See TrackWriter. */
+    public function write(): TrackWriter
+    {
+        return new TrackWriter($this);
+    }
+
+    /** @internal for TrackWriter */
+    public function config(string $key, mixed $default = null): mixed
+    {
+        return $this->option($key, $default);
+    }
+
+    /** @internal @return array{key:string, secret:string} */
+    public function credentials(): array
+    {
+        return [
+            'key' => (string) ($this->key ?: $this->option('key')),
+            'secret' => (string) ($this->secret ?: $this->option('secret')),
+        ];
+    }
+
+    /** `author/track/` from a permalink, a full URL, or a bare track slug. */
+    protected function path(string $permalink): string
+    {
+        $permalink = trim(str_replace('https://hearthis.at/', '', $permalink), '/');
+
+        return (str_contains($permalink, '/') ? $permalink : $this->user().'/'.$permalink).'/';
     }
 
     // -----------------------------------------------------------------
