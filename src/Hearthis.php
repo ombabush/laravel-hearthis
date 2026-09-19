@@ -197,6 +197,10 @@ class Hearthis
         return $this->remember('playlists:'.$this->user().':'.(int) $withTracks, function () use ($withTracks) {
             return collect($this->get($this->user().'/', ['type' => 'playlists', 'page' => 1, 'count' => 50]))
                 ->filter(fn ($s) => is_array($s) && ! empty($s['permalink']))
+                // Deduplicated by id: hearthis repeats a set in these listings,
+                // and without this the extra copy costs a second request for the
+                // same track ids and then lands in whatever stores the result.
+                ->unique('id')
                 ->map(fn (array $set) => Playlist::fromApi($set, $withTracks ? $this->playlistTrackIds((string) $set['permalink']) : []))
                 ->sortByDesc('count')
                 ->values();

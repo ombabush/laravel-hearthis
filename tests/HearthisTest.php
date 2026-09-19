@@ -257,3 +257,16 @@ it('groups a set list the two ways anyone reads one', function () {
         ->and(Hearthis::humanDuration(9000))->toBe('2 h 30 min')
         ->and(Hearthis::humanDuration(1800))->toBe('30 min');
 });
+
+it('collapses the sets hearthis lists twice', function () {
+    // Observed live: a profile with five sets answered with six, the same id
+    // appearing twice. Unchecked, the duplicate costs a second request for the
+    // same track ids and then lands in whatever stores the result.
+    Http::fake(['*type=playlists*' => Http::response([
+        ['id' => 1, 'title' => 'Doubled', 'permalink' => 'a', 'track_count' => 2],
+        ['id' => 1, 'title' => 'Doubled', 'permalink' => 'a', 'track_count' => 2],
+        ['id' => 2, 'title' => 'Once', 'permalink' => 'b', 'track_count' => 1],
+    ]), '*set/*' => Http::response([track(1)])]);
+
+    expect(Hearthis::for('ombabush')->playlists())->toHaveCount(2);
+});

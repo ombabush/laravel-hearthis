@@ -26,6 +26,9 @@ class Sets
         return collect($this->client->raw('app/collections/', ['count' => $count, 'page' => $page], auth: true))
             ->filter(fn ($s) => is_array($s) && ! empty($s['id']))
             ->map(fn (array $s) => Playlist::fromApi($s))
+            // hearthis repeats sets in this listing — the same id arrives twice.
+            // Observed on a profile with five sets, which came back as six.
+            ->unique('id')
             ->values();
     }
 
