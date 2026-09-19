@@ -188,7 +188,11 @@ and `file_get_contents` on one is 200 MB of PHP memory before a byte leaves the
 machine. `uploadRaw()` sends hearthis's other form — a raw binary body with an
 `X-Filename` header — for when you want one less layer of framing.
 
-### Three things that will bite you
+### Three things that would bite you — handled here, listed so you know why
+
+These are hearthis's behaviours, not this package's. Each one is dealt with
+below; they are written down because the handling looks paranoid until you know
+what it is for.
 
 **Metadata is best-effort on upload.** An unknown genre or an unparseable date
 does *not* fail the upload; the item quietly carries a `meta_error` instead,
@@ -201,9 +205,13 @@ reason), so anything you care about is better set there.
 already uploaded`, which is the one a re-run of a batch hits. They are raised as
 exceptions here, with hearthis's own wording.
 
-**Dates need an explicit offset.** `2026-07-01T20:00:00+02:00`, not
-`2026-07-01 20:00:00` — a bare date is read in the server's timezone, and you do
-not know what that is. Send `0` or an empty value to clear a schedule.
+**Dates need an explicit offset** — and this package adds one for you. Their
+parser is `strtotime()`, so a bare `2026-07-01 20:00:00` is read in *their*
+server's timezone: the upload succeeds, the field is accepted, and the release
+quietly happens at the wrong hour. Anything without an offset is resolved in
+your application's timezone and sent as ISO 8601; a date that cannot be read at
+all raises rather than travelling as nonsense. Send `0` or an empty value to
+clear a schedule.
 
 ### Chapters
 

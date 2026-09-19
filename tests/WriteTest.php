@@ -196,3 +196,36 @@ it('will not touch group or set endpoints without credentials', function () {
     expect(fn () => Hearthis::for('ombabush')->groups()->join(42))
         ->toThrow(HearthisException::class, 'credentials');
 });
+
+it('never sends a schedule without a timezone, because that failure is silent', function () {
+    Http::fake(['*' => Http::response(['success' => true])]);
+
+    config()->set('app.timezone', 'Europe/Berlin');
+
+    // A bare date is read in THEIR server's timezone — the upload succeeds, the
+    // field is accepted, and the release happens at the wrong hour.
+    ($this->writer)()->edit(501, ['release_at' => '2026-07-01 20:00:00']);
+
+    Http::assertSent(function (Request $r) {
+        return (bool) preg_match('/release_at=[^&]*(%2B|\+)\d{2}(%3A|:)\d{2}/', (string) $r->body());
+    });
+});
+
+it('passes an already-offset date through untouched, and 0 clears a schedule', function () {
+    Http::fake(['*' => Http::response(['success' => true])]);
+
+    $w = ($this->writer)();
+
+    $w->edit(501, ['release_at' => '2026-07-01T20:00:00+02:00']);
+    Http::assertSent(fn (Request $r) => str_contains(urldecode((string) $r->body()), '2026-07-01T20:00:00+02:00'));
+
+    $w->edit(501, ['release_at' => 0]);
+    Http::assertSent(fn (Request $r) => str_contains((string) $r->body(), 'release_at=0'));
+});
+
+it('refuses a date it cannot read rather than sending nonsense', function () {
+    Http::fake(['*' => Http::response(['success' => true])]);
+
+    expect(fn () => ($this->writer)()->edit(501, ['release_at' => 'next thursday-ish']))
+        ->toThrow(HearthisException::class, 'wrong hour');
+});

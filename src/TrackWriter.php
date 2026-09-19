@@ -3,6 +3,7 @@
 namespace Ombabush\Hearthis;
 
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Ombabush\Hearthis\Exceptions\HearthisException;
 
@@ -188,8 +189,8 @@ class TrackWriter
         }
 
         foreach (['release_at', 'unpublish_at'] as $when) {
-            if (! empty($fields[$when]) && ! is_string($fields[$when])) {
-                $fields[$when] = $fields[$when]->toIso8601String();
+            if (array_key_exists($when, $fields)) {
+                $fields[$when] = $this->schedule($fields[$when]);
             }
         }
 
@@ -234,6 +235,47 @@ class TrackWriter
         }
 
         return $handle;
+    }
+
+    /**
+     * A schedule hearthis cannot misread.
+     *
+     * Their parser is `strtotime()` and the result is stored as a Unix
+     * timestamp, so a value WITHOUT an offset is interpreted in their server's
+     * timezone — which nobody knows. The failure is silent and expensive: the
+     * upload succeeds, the field is accepted, and the release simply happens at
+     * the wrong hour.
+     *
+     * So anything that is not already offset-bearing is resolved here, in the
+     * application's own timezone, and sent as ISO 8601 with the offset spelled
+     * out. `0`, null and '' pass through — those are how you CLEAR a schedule.
+     */
+    protected function schedule(mixed $value): mixed
+    {
+        if ($value === null || $value === '' || $value === 0 || $value === '0') {
+            return $value;
+        }
+
+        if ($value instanceof \DateTimeInterface) {
+            return Carbon::instance($value)->toIso8601String();
+        }
+
+        $value = trim((string) $value);
+
+        // Already carries a zone: «…+02:00», «…Z», «… -0300».
+        if (preg_match('/(Z|[+-]\d{2}:?\d{2})$/', $value)) {
+            return $value;
+        }
+
+        try {
+            return Carbon::parse($value)->toIso8601String();
+        } catch (\Throwable) {
+            throw new HearthisException(
+                "Could not read '{$value}' as a date. Use ISO 8601 with an offset, "
+                .'e.g. 2026-07-01T20:00:00+02:00 — hearthis reads a bare date in its '
+                .'own timezone, and the release quietly happens at the wrong hour.'
+            );
+        }
     }
 
     protected function request(): PendingRequest
